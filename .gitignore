@@ -27,3 +27,7 @@ env/
 # Miscellaneous
 .DS_Store
 Thumbs.db
+
+# Models PTH
+Models/
+*.pth
