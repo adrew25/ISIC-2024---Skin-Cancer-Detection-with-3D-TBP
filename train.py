@@ -1,9 +1,10 @@
 import os
-import torch
 import pandas as pd
 import numpy as np
+import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 from torch.cuda.amp import GradScaler, autocast
 import gc
@@ -12,7 +13,7 @@ from sklearn.utils.class_weight import compute_class_weight
 import timm
 
 from Dataloader import create_dataloaders
-from utils.utils import calculate_partial_auc_by_tpr, save_best_model
+from utils.utils import pauc, save_best_model
 
 dotenv.load_dotenv()
 
@@ -49,9 +50,9 @@ optimizer = optim.Adam(model.parameters(), lr=0.001)
 scaler = GradScaler()
 
 num_epochs = 10
-batch_size = 32
+batch_size = 128  # Reduce batch size to reduce memory usage
 k_folds = 5
-best_auc = 0.0
+best_val_loss = float("inf")
 
 for fold, train_dataloader, val_dataloader in create_dataloaders(
     train_metadata_df, train_hdf5_path, batch_size=batch_size, k_folds=k_folds
@@ -69,47 +70,48 @@ for fold, train_dataloader, val_dataloader in create_dataloaders(
 
             with autocast():
                 outputs = model(images)
-                outputs = outputs.squeeze()
-                loss = criterion(outputs, labels.float())
+                loss = criterion(outputs, labels.unsqueeze(1).float())
 
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
 
-            train_loss += loss.item()
+            train_loss += loss.item() * images.size(0)
 
+        train_loss /= len(train_dataloader.dataset)
+
+        # Validation phase
         model.eval()
         val_loss = 0.0
-        all_labels = []
-        all_outputs = []
+        val_true = []
+        val_pred = []
         with torch.no_grad():
-            for images, labels in tqdm(val_dataloader, desc="Validating"):
+            for images, labels in tqdm(
+                val_dataloader, desc=f"Validating Epoch {epoch + 1}/{num_epochs}"
+            ):
                 images, labels = images.to(device), labels.to(device)
-                outputs = model(images)
-                outputs = outputs.squeeze()
-                loss = criterion(outputs, labels.float())
-                val_loss += loss.item()
 
-                all_labels.append(labels.cpu().numpy())
-                all_outputs.append(outputs.cpu().numpy())
+                with autocast():
+                    outputs = model(images)
+                    loss = criterion(outputs, labels.unsqueeze(1).float())
+                    val_loss += loss.item() * images.size(0)
 
-        all_labels = np.concatenate(all_labels)
-        all_outputs = np.concatenate(all_outputs)
+                val_true.extend(labels.cpu().numpy())
+                val_pred.extend(outputs.cpu().numpy())
 
-        partial_auc = calculate_partial_auc_by_tpr(all_labels, all_outputs)
+        val_loss /= len(val_dataloader.dataset)
+        partial_auc = pauc(val_true, val_pred, min_tpr=0.80)
+
+        print(f"Epoch {epoch + 1}/{num_epochs}, Fold {fold + 1}/{k_folds}")
         print(
-            f"Epoch [{epoch + 1}/{num_epochs}], Train Loss: {train_loss / len(train_dataloader)}, "
-            f"Validation Loss: {val_loss / len(val_dataloader)}, Partial AUC: {partial_auc}"
+            f"Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, Partial AUC: {partial_auc:.4f}"
         )
 
-        best_auc = save_best_model(
-            model,
-            epoch,
-            partial_auc,
-            best_auc,
-            f"{working_dir}/best_model_fold_{fold + 1}",
+        # Save best model based on validation loss
+        best_val_loss = save_best_model(
+            model, fold + 1, epoch + 1, val_loss, working_dir, best_val_loss
         )
 
-        # Clear memory
-        gc.collect()
+        # Clear cache to free memory
         torch.cuda.empty_cache()
+        gc.collect()

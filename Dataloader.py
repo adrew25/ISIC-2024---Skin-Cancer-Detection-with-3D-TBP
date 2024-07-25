@@ -18,17 +18,24 @@ class SkinLesionDataset(Dataset):
         )  # Ensure image_id is a string
         self.labels = target
         self.transform = transform
+        self.hdf5_file = None  # Initialize HDF5 file object
 
     def __len__(self):
         return len(self.images_ids)
 
     def __getitem__(self, idx):
+        if self.hdf5_file is None:
+            self.hdf5_file = h5py.File(
+                self.hdf5_file_path, "r"
+            )  # Open HDF5 file if not already open
+
         image_id = self.images_ids.iloc[idx]
-        with h5py.File(self.hdf5_file_path, "r") as hdf5_file:
-            image = (
-                np.array(Image.open(BytesIO(hdf5_file[image_id][()])), dtype=np.float32)
-                / 255
+        image = (
+            np.array(
+                Image.open(BytesIO(self.hdf5_file[image_id][()])), dtype=np.float32
             )
+            / 255
+        )
 
         if self.transform:
             image = self.transform(image=image)["image"]
@@ -39,8 +46,12 @@ class SkinLesionDataset(Dataset):
         else:
             return image, image_id
 
+    def __del__(self):
+        if self.hdf5_file is not None:
+            self.hdf5_file.close()
 
-def get_transforms(image_dim=256):
+
+def get_transforms(image_dim=156):
     train_transform = A.Compose(
         [
             A.Resize(image_dim, image_dim),
@@ -63,7 +74,7 @@ def get_transforms(image_dim=256):
 
 
 def create_dataloaders(
-    metadata_df, hdf5_file_path, batch_size=32, num_workers=4, image_dim=256, k_folds=5
+    metadata_df, hdf5_file_path, batch_size=32, num_workers=2, image_dim=256, k_folds=5
 ):
     train_transform, val_transform = get_transforms(image_dim)
 
@@ -93,7 +104,7 @@ def create_dataloaders(
             batch_size=batch_size,
             shuffle=True,
             num_workers=num_workers,
-            pin_memory=True,
+            pin_memory=False,
         )
 
         val_dataloader = DataLoader(
@@ -101,7 +112,7 @@ def create_dataloaders(
             batch_size=batch_size,
             shuffle=False,
             num_workers=num_workers,
-            pin_memory=True,
+            pin_memory=False,
         )
 
         yield fold, train_dataloader, val_dataloader
