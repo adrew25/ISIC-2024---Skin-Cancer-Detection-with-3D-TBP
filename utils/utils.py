@@ -51,11 +51,9 @@ def pauc(true, pred, min_tpr: float = 0.80) -> float:
     return partial_auc
 
 
-def save_best_model(model, fold, epoch, val_loss, save_dir, best_val_loss):
-    model_file = f"best_model_fold{fold}_epoch{epoch}_valLoss{val_loss:.4f}.pth"
+def save_best_model(model, model_name, fold, epoch, val_loss, partial_auc, save_dir):
+    model_file = f"{model_name}_fold{fold}_epoch{epoch}_valLoss{val_loss:.4f}_partialAUC{partial_auc:.4f}.pth"
     model_path = os.path.join(save_dir, model_file)
-    if val_loss < best_val_loss:
-        torch.save(model.state_dict(), model_path)
-        print(f"Saved best model to {model_path}")
-        return val_loss
-    return best_val_loss
+    torch.save(model.state_dict(), model_path)
+    print(f"Saved model to {model_path}")
+    return val_loss, partial_auc
